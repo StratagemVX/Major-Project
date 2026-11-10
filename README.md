@@ -140,3 +140,19 @@ This repository forms part of the collaborative PRISM research project alongside
 - **GitHub:** [https://github.com/StratagemVX](https://github.com/StratagemVX)
 - **Portfolio:** [https://chethan-kumar-portfolio.vercel.app/](https://chethan-kumar-portfolio.vercel.app/)
 - **LinkedIn:** [https://linkedin.com/in/chethan-kumar-b-s-781a002bb](https://linkedin.com/in/chethan-kumar-b-s-781a002bb)
+
+## Verification and maintenance
+
+Keep the project's problem statement, architecture, data sources, and feature claims aligned with the implementation. Clearly distinguish implemented behavior from planned or experimental capabilities.
+
+### Build and test commands
+
+No root package manifest was available during this pass. Use the actual language-specific dependency manifest and CI configuration to select verification commands.
+
+### Contribution and security notes
+
+- Document datasets, model assumptions, and external services where relevant; do not imply unverified accuracy or performance.
+- Never commit credentials, private keys, personal data, or local environment files.
+- Use placeholder-only configuration examples and deployment-managed secrets.
+- Include reproducible issue steps and expected/actual results.
+- Run relevant build, lint, and test checks before merging.
