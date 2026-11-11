@@ -1,179 +1,142 @@
-import cv2
-from ultralytics import YOLO
+"""Real-time YOLOv8 webcam tracking and motion overlay script."""
+
+from __future__ import annotations
+
+import sys
 import time
-import math
+from pathlib import Path
 
-# Load YOLO model
-model = YOLO("yolov8n.pt")
-model.to("cuda")
+ROOT_DIR = Path(__file__).resolve().parent.parent
+if str(ROOT_DIR) not in sys.path:
+    sys.path.insert(0, str(ROOT_DIR))
 
-# Open webcam
-cap = cv2.VideoCapture(0)
+from perception.detection import (
+    compute_approach_velocity,
+    compute_centroid,
+    compute_velocity,
+    resolve_device,
+    resolve_weights_path,
+    smooth_height,
+)
 
-cap.set(cv2.CAP_PROP_FRAME_WIDTH, 640)
-cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 480)
 
-# Store previous states
-previous_positions = {}
-previous_heights = {}
-height_smooth = {}
+def run_webcam_tracker(camera_index: int = 0, weights_path: Path | None = None) -> None:
+    """Run live webcam object tracking with CPU/CUDA fallback and guaranteed camera release."""
+    import cv2
+    import torch
+    from ultralytics import YOLO
 
-prev_time = 0
+    resolved_weights = resolve_weights_path(weights_path)
+    if not resolved_weights.is_file():
+        raise FileNotFoundError(f"YOLO weights file not found: {resolved_weights}")
 
-if not cap.isOpened():
-    print("Camera cannot be opened")
+    device = resolve_device(bool(torch.cuda.is_available()))
+    model = YOLO(str(resolved_weights))
+    model.to(device)
 
-while True:
+    cap = cv2.VideoCapture(camera_index)
+    cap.set(cv2.CAP_PROP_FRAME_WIDTH, 640)
+    cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 480)
 
-    ret, frame = cap.read()
-    if not ret:
-        break
+    if not cap.isOpened():
+        cap.release()
+        raise RuntimeError(f"Camera at index {camera_index} cannot be opened")
 
-    annotated_frame = frame.copy()
+    previous_positions: dict[int, tuple[int, int, float]] = {}
+    previous_heights: dict[int, tuple[float, float]] = {}
+    height_smooth: dict[int, float] = {}
+    prev_time = 0.0
 
-    # Run YOLO tracking
-    results = model.track(frame, persist=True, verbose=False)
+    try:
+        while True:
+            ret, frame = cap.read()
+            if not ret:
+                break
 
-    if results[0].boxes.id is not None:
+            annotated_frame = frame.copy()
+            results = model.track(frame, persist=True, verbose=False)
 
-        boxes = results[0].boxes.xyxy
-        ids = results[0].boxes.id
+            if results and results[0].boxes is not None and results[0].boxes.id is not None:
+                boxes = results[0].boxes.xyxy
+                ids = results[0].boxes.id
 
-        for box, obj_id in zip(boxes, ids):
+                for box, obj_id in zip(boxes, ids):
+                    track_id = int(obj_id)
+                    x1, y1, x2, y2 = map(int, box)
+                    cx, cy = compute_centroid(x1, y1, x2, y2)
+                    height = y2 - y1
 
-            obj_id = int(obj_id)
+                    cv2.rectangle(annotated_frame, (x1, y1), (x2, y2), (0, 255, 0), 2)
+                    cv2.circle(annotated_frame, (cx, cy), 5, (0, 0, 255), -1)
 
-            x1, y1, x2, y2 = map(int, box)
+                    current_time = time.time()
+                    vx, vy, speed = compute_velocity(cx, cy, current_time, previous_positions.get(track_id))
+                    previous_positions[track_id] = (cx, cy, current_time)
 
-            # Bounding box center
-            cx = int((x1 + x2) / 2)
-            cy = int((y1 + y2) / 2)
+                    smoothed_height = smooth_height(height, height_smooth.get(track_id), alpha=0.7)
+                    height_smooth[track_id] = smoothed_height
 
-            width = x2 - x1
-            height = y2 - y1
+                    v_approach = compute_approach_velocity(
+                        smoothed_height,
+                        current_time,
+                        previous_heights.get(track_id),
+                    )
+                    previous_heights[track_id] = (smoothed_height, current_time)
 
-            # Draw bounding box
-            cv2.rectangle(annotated_frame,(x1,y1),(x2,y2),(0,255,0),2)
+                    scale = 0.1
+                    end_x = int(cx + vx * scale)
+                    end_y = int(cy + vy * scale)
+                    cv2.arrowedLine(annotated_frame, (cx, cy), (end_x, end_y), (255, 0, 0), 2)
+                    cv2.putText(
+                        annotated_frame,
+                        f"ID {track_id}",
+                        (x1, y1 - 10),
+                        cv2.FONT_HERSHEY_SIMPLEX,
+                        0.6,
+                        (0, 255, 255),
+                        2,
+                    )
+                    cv2.putText(
+                        annotated_frame,
+                        f"V:{speed:.1f}",
+                        (cx + 10, cy),
+                        cv2.FONT_HERSHEY_SIMPLEX,
+                        0.5,
+                        (255, 0, 255),
+                        2,
+                    )
+                    if abs(v_approach) > 1:
+                        cv2.putText(
+                            annotated_frame,
+                            f"A:{v_approach:.1f}",
+                            (x1, y2 + 20),
+                            cv2.FONT_HERSHEY_SIMPLEX,
+                            0.5,
+                            (0, 255, 255),
+                            2,
+                        )
 
-            # Draw centroid
-            cv2.circle(annotated_frame,(cx,cy),5,(0,0,255),-1)
+            curr_time = time.time()
+            fps = 1.0 / (curr_time - prev_time) if prev_time != 0.0 else 0.0
+            prev_time = curr_time
 
-            current_time = time.time()
-
-            # ----- Centroid velocity -----
-
-            if obj_id in previous_positions:
-
-                px, py, pt = previous_positions[obj_id]
-
-                dt = max(current_time - pt, 1e-5)
-
-                vx = (cx - px) / dt
-                vy = (cy - py) / dt
-
-            else:
-                vx, vy = 0, 0
-
-            previous_positions[obj_id] = (cx, cy, current_time)
-
-            speed = math.sqrt(vx**2 + vy**2)
-
-            # ----- Smooth height for approach velocity -----
-
-            alpha = 0.7
-
-            if obj_id in height_smooth:
-                height_smooth[obj_id] = alpha * height_smooth[obj_id] + (1-alpha) * height
-            else:
-                height_smooth[obj_id] = height
-
-            smooth_height = height_smooth[obj_id]
-
-            # ----- Approach velocity -----
-
-            if obj_id in previous_heights:
-
-                ph, pt = previous_heights[obj_id]
-
-                dt = max(current_time - pt, 1e-5)
-
-                v_approach = (smooth_height - ph) / dt
-
-            else:
-                v_approach = 0
-
-            previous_heights[obj_id] = (smooth_height, current_time)
-
-            # ----- Motion arrow -----
-
-            scale = 0.1
-
-            end_x = int(cx + vx * scale)
-            end_y = int(cy + vy * scale)
-
-            cv2.arrowedLine(
-                annotated_frame,
-                (cx,cy),
-                (end_x,end_y),
-                (255,0,0),
-                2
-            )
-
-            # Draw object ID
             cv2.putText(
                 annotated_frame,
-                f"ID {obj_id}",
-                (x1,y1-10),
+                f"FPS:{int(fps)}",
+                (10, 30),
                 cv2.FONT_HERSHEY_SIMPLEX,
-                0.6,
-                (0,255,255),
-                2
+                1,
+                (0, 255, 0),
+                2,
             )
 
-            # Show lateral velocity
-            cv2.putText(
-                annotated_frame,
-                f"V:{speed:.1f}",
-                (cx+10,cy),
-                cv2.FONT_HERSHEY_SIMPLEX,
-                0.5,
-                (255,0,255),
-                2
-            )
+            cv2.imshow("YOLO Motion Tracking", annotated_frame)
+            if cv2.waitKey(1) & 0xFF == ord("q"):
+                break
+    finally:
+        cap.release()
+        cv2.destroyAllWindows()
 
-            # Show approach velocity (only if meaningful)
-            if abs(v_approach) > 1:
 
-                cv2.putText(
-                    annotated_frame,
-                    f"A:{v_approach:.1f}",
-                    (x1,y2+20),
-                    cv2.FONT_HERSHEY_SIMPLEX,
-                    0.5,
-                    (0,255,255),
-                    2
-                )
-
-    # ----- FPS -----
-
-    curr_time = time.time()
-    fps = 1/(curr_time-prev_time) if prev_time != 0 else 0
-    prev_time = curr_time
-
-    cv2.putText(
-        annotated_frame,
-        f"FPS:{int(fps)}",
-        (10,30),
-        cv2.FONT_HERSHEY_SIMPLEX,
-        1,
-        (0,255,0),
-        2
-    )
-
-    cv2.imshow("YOLO Motion Tracking", annotated_frame)
-
-    if cv2.waitKey(1) & 0xFF == ord('q'):
-        break
-
-cap.release()
-cv2.destroyAllWindows()
+if __name__ == "__main__":
+    run_webcam_tracker()
