@@ -2,5 +2,13 @@ myvenv/
 venv/
 .venv/
 __pycache__/
-*.pyc
+*.py[cod]
+.pytest_cache/
 .env
+.env.*
+!.env.example
+runs/
+*.log
+*.tmp
+.DS_Store
+Thumbs.db
