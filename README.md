@@ -1,8 +1,8 @@
-# PRISM — Predictive Risk Modeling Framework for Assistive Indoor Navigation
+# PRISM — Assistive Indoor Perception & Motion Tracking Prototype
 
-> Real-time computer vision obstacle perception, spatial bounding, and trajectory hazard estimation engine utilizing YOLOv8 neural networks for assistive navigation aids.
+> Real-time object detection, bounding-box tracking, and approach-velocity estimation prototype built with Python, YOLOv8 (`ultralytics`), PyTorch, and OpenCV.
 
-[![Python](https://img.shields.io/badge/Python-3.10%2B-blue.svg)](https://www.python.org/)
+[![Python](https://img.shields.io/badge/Python-3.11-blue.svg)](https://www.python.org/)
 [![YOLOv8](https://img.shields.io/badge/YOLOv8-Ultralytics-orange.svg)](https://github.com/ultralytics/ultralytics)
 [![PyTorch](https://img.shields.io/badge/PyTorch-2.0%2B-red.svg)](https://pytorch.org/)
 [![OpenCV](https://img.shields.io/badge/OpenCV-4.8-green.svg)](https://opencv.org/)
@@ -11,33 +11,24 @@
 
 ## Executive Overview
 
-PRISM (Predictive Risk Modeling Framework for Assistive Indoor Navigation) is a computer vision research engineering platform developed to empower visually impaired individuals to navigate complex, dynamic indoor corridors independently. This repository hosts the perception and hazard identification engine of the PRISM architecture, pairing real-time optical video capture with YOLOv8 deep learning models to perform object localization, bounding box velocity tracking, and spatial collision risk indexing.
+**PRISM** (`Major-Project`) is the computer vision perception module for an assistive indoor navigation concept designed to detect indoor obstacles and track their motion in real time from a webcam stream. Using the YOLOv8 Nano model (`input_layer/yolov8n.pt`) and OpenCV, the perception loop estimates per-track centroid velocity (`vx`, `vy`) and exponentially smoothed bounding-box height expansion rate (`approach_velocity`, in pixels/second) as a visual proxy for approaching objects.
 
 ---
 
-## Problem Statement & Research Context
+## Implemented vs. Planned Capabilities
 
-Indoor pedestrian environments present complex navigational challenges for visually impaired individuals:
-1. **Dynamic Moving Obstacles:** Approaching pedestrians, opening doors, and moving carts that change position rapidly.
-2. **Overhead & Low-Profile Hazards:** Tables, hanging signs, and construction barriers that standard cane sweeps miss.
-3. **Semantic Ambiguity:** Existing ultrasonic distance sensors detect proximity but cannot discern whether an object is a safe static wall or a dynamic high-risk obstacle.
+### Implemented in Current Codebase
+- **Live Webcam YOLOv8 Tracking (`input_layer/webcam.py`):** Captures optical frames via OpenCV, runs Ultralytics YOLOv8 tracking (`model.track(..., persist=True)`), draws bounding boxes, tracks per-object IDs, and annotates centroid movement speed and bounding-box height growth rate.
+- **Hardware Device Reporting (`main.py`):** Checks PyTorch CUDA availability and reports the active compute device.
+- **CPU Fallback, Resource Lifecycle & Pure-Python Geometry Helpers (Open Draft PR #2 — `maintenance/repository-quality-improvements`):**
+  - `main.py` calls `get_runtime_summary()` so CPU-only environments no longer crash when calling `torch.cuda.get_device_name()`.
+  - `perception/detection.py` implements unit-tested helper functions (`resolve_device`, `resolve_weights_path`, `compute_centroid`, `compute_velocity`, `smooth_height`, `compute_approach_velocity`).
+  - `input_layer/webcam.py` resolves `input_layer/yolov8n.pt` relative to the repository root, fails fast if `cv2.VideoCapture` cannot open the camera, and releases capture/windows in `try...finally`.
+  - Adds `tests/test_perception_detection.py` (4 `unittest` test cases), `.github/workflows/quality.yml`, and hardened `.gitignore`.
 
-PRISM resolves these limitations by executing semantic object recognition alongside spatial geometric projection:
-
-$$\text{RiskLevel} = w_1 \cdot \frac{1}{d_{\text{est}}} + w_2 \cdot \frac{\Delta \text{Area}}{\Delta t} + w_3 \cdot C_{\text{class}}$$
-
-where $d_{\text{est}}$ represents estimated obstacle depth, $\Delta \text{Area} / \Delta t$ tracks the rate of bounding box expansion (time-to-contact proxy), and $C_{\text{class}}$ represents a semantic risk coefficient assigned to the identified obstacle class.
-
----
-
-## Core Capabilities & Features
-
-### Implemented Perception Capabilities
-- **Optical Ingestion Pipeline (`input_layer/webcam.py`):** Multi-threaded camera frame capture utilizing OpenCV, maintaining frame buffer stability at 30 FPS.
-- **YOLOv8 Object Recognition (`perception/detection.py`):** Pretrained convolutional neural network inference optimized for indoor semantic classes (people, chairs, doors, stairs, backpacks).
-- **Spatial Bounding & Filtering:** Rejects spurious detections below confidence thresholds ($c < 0.5$) and normalizes spatial coordinates.
-- **Real-Time Execution Engine (`main.py`):** Orchestrates frame capture, inference loops, and visual bounding box overlays.
-- **Hardware Agnostic:** Supports standard optical USB webcams and CSI camera modules on CPU or CUDA-accelerated GPUs.
+### Collaborative Research Context / Future Roadmap (Not Yet Implemented in This Repo)
+- Multi-factor collision `RiskLevel` fusion using calibrated depth sensors (`1 / d_est`).
+- Spoken/audio hazard feedback synthesis (belongs to downstream mobile/feedback integration modules).
 
 ---
 
@@ -45,26 +36,22 @@ where $d_{\text{est}}$ represents estimated obstacle depth, $\Delta \text{Area} 
 
 ```mermaid
 flowchart LR
-    Cam[Optical Video Stream] --> Ingest[input_layer/webcam.py]
-    Ingest --> FrameBuffer[Frame Normalizer & Scaler]
-    FrameBuffer --> Detect[perception/detection.py]
-    Detect --> YOLO[YOLOv8 Neural Network]
-    YOLO --> Bounding[Bounding Box & Class Prediction]
-    Bounding --> Risk[Risk Assessment Engine]
-    Risk --> Output[Audio Feedback & Visual Telemetry]
+    Cam[Webcam / Optical Feed] --> Cap[input_layer/webcam.py]
+    Cap --> YOLO[YOLOv8n Tracker - input_layer/yolov8n.pt]
+    YOLO --> Track[Centroid Velocity & Smoothed Height EMA]
+    Track --> Helpers[perception/detection.py Helpers - PR #2]
+    Track --> Display[OpenCV Annotated Frame Output]
 ```
 
 ---
 
-## Deep Learning Model Specifications
+## Model & Dependency Specifications (`requirements.txt`)
 
-- **Base Architecture:** YOLOv8 Nano (`yolov8n.pt`)
-- **Weights Location:** `input_layer/yolov8n.pt`
-- **Input Resolution:** $640 \times 640 \times 3$ RGB
-- **Inference Latency:**
-  - CPU (Intel Core i5 / AMD Ryzen 5): $\approx 45\text{ ms}$
-  - GPU (NVIDIA RTX 3060): $\approx 8\text{ ms}$
-- **Detection Classes:** 80 COCO classes with prioritization for indoor navigation obstacles (person, chair, couch, potted plant, door, suitcase).
+- `ultralytics>=8.0.0` (uses bundled `input_layer/yolov8n.pt`)
+- `opencv-python>=4.8.0`
+- `torch>=2.0.0`
+- `torchvision>=0.15.0`
+- `numpy>=1.24.0`
 
 ---
 
@@ -72,71 +59,61 @@ flowchart LR
 
 ```text
 Major-Project/
+├── .github/workflows/quality.yml        # Python compile & unittest CI (PR #2)
 ├── input_layer/
-│   ├── webcam.py            # Video capture and frame ingestion stream
-│   └── yolov8n.pt           # YOLOv8 nano model weights
+│   ├── webcam.py                        # OpenCV capture + YOLOv8 tracking loop
+│   └── yolov8n.pt                       # YOLOv8 Nano model weights
 ├── perception/
-│   └── detection.py         # Object detection, filtering & confidence scoring
-├── main.py                  # Real-time execution loop
-├── requirements.txt         # Verified Python dependencies
-└── README.md                # Technical framework documentation
+│   ├── __init__.py                      # Package marker (PR #2)
+│   └── detection.py                     # Geometry/velocity/device helpers (PR #2; empty placeholder on main)
+├── tests/
+│   └── test_perception_detection.py     # Unit tests for perception.detection helpers (PR #2)
+├── main.py                              # CUDA/CPU device check entrypoint
+├── requirements.txt                     # Python dependency manifest
+└── README.md                            # Project documentation
 ```
 
 ---
 
-## Setup & Execution
+## Setup, Execution & Verification
 
-### Prerequisites
-- Python 3.10 or higher
-- Optical webcam or camera feed
-- (Optional) NVIDIA CUDA Toolkit for GPU acceleration
-
-### Installation Instructions
+### Installation
 ```bash
-# Clone the repository
 git clone https://github.com/StratagemVX/Major-Project.git
 cd Major-Project
 
-# Create and activate virtual environment
-python -m venv venv
-# Windows:
-.\venv\Scripts\activate
-# Linux/macOS:
-# source venv/bin/activate
+python -m venv .venv
+# Windows: .venv\Scripts\activate
+# Linux/macOS: source .venv/bin/activate
 
-# Install dependencies
 pip install -r requirements.txt
+```
 
-# Run the real-time perception engine
+### Running Locally
+```bash
+# Check PyTorch CUDA / CPU device detection
 python main.py
+
+# Run live webcam tracking (requires camera device; press 'q' to quit)
+python input_layer/webcam.py
 ```
 
----
-
-## Dependency Manifest (`requirements.txt`)
-
-```text
-ultralytics>=8.0.0
-opencv-python>=4.8.0
-torch>=2.0.0
-torchvision>=0.15.0
-numpy>=1.24.0
+### Verification Commands (PR #2 / CI `quality.yml`)
+```bash
+python -m compileall -q main.py input_layer perception tests
+python -m unittest discover -s tests -v
 ```
+- `main` branch status: contains empty `perception/detection.py` and an unguarded CUDA `get_device_name()` call in `main.py` on CPU-only machines.
+- Draft PR #2 (`maintenance/repository-quality-improvements`): implements the helpers, CPU fallback, camera cleanup guards, unit tests, and GitHub Actions workflow.
 
 ---
 
 ## Research Collaboration & Attribution
 
-This repository forms part of the collaborative PRISM research project alongside partner modules:
-- Complete Android application and evaluation suite: [Manohar005-PY/PRISM_PROJECT](https://github.com/Manohar005-PY/PRISM_PROJECT)
-- Depth perception engine: [Manohar005-PY/PRISM-A-Predictive-Risk-Modeling-Framework-for-Assistive-Indoor-Navigation](https://github.com/Manohar005-PY/PRISM-A-Predictive-Risk-Modeling-Framework-for-Assistive-Indoor-Navigation)
-
----
-
-## Contributor Attribution & Profile
-
 - **Perception Lead:** Chethan Kumar B S (`StratagemVX`)
-- **Institution:** Department of Computer Science & Engineering, MVJ College of Engineering
+- **Partner Modules:**
+  - Android application and evaluation suite: [Manohar005-PY/PRISM_PROJECT](https://github.com/Manohar005-PY/PRISM_PROJECT)
+  - Depth perception engine: [Manohar005-PY/PRISM-A-Predictive-Risk-Modeling-Framework-for-Assistive-Indoor-Navigation](https://github.com/Manohar005-PY/PRISM-A-Predictive-Risk-Modeling-Framework-for-Assistive-Indoor-Navigation)
 - **GitHub:** [https://github.com/StratagemVX](https://github.com/StratagemVX)
 - **Portfolio:** [https://chethan-kumar-portfolio.vercel.app/](https://chethan-kumar-portfolio.vercel.app/)
 - **LinkedIn:** [https://linkedin.com/in/chethan-kumar-b-s-781a002bb](https://linkedin.com/in/chethan-kumar-b-s-781a002bb)
